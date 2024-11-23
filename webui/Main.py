@@ -62,14 +62,18 @@ i18n_dir = os.path.join(root_dir, "webui", "i18n")
 config_file = os.path.join(root_dir, "webui", ".streamlit", "webui.toml")
 system_locale = utils.get_system_locale()
 
-if 'video_subject' not in st.session_state:
-    st.session_state['video_subject'] = ''
-if 'video_clip_json' not in st.session_state:
-    st.session_state['video_clip_json'] = ''
-if 'video_plot' not in st.session_state:
-    st.session_state['video_plot'] = ''
+if 'audio_subject' not in st.session_state:
+    st.session_state['audio_subject'] = ''
+if 'audio_clip_json' not in st.session_state:
+    st.session_state['audio_clip_json'] = ''
+if 'audio_path' not in st.session_state:
+    st.session_state['audio_path'] = ''
+if 'text_desc' not in st.session_state:
+    st.session_state['text_desc'] = ''
 if 'ui_language' not in st.session_state:
     st.session_state['ui_language'] = config.ui.get("language", system_locale)
+if 'video_list' not in st.session_state:
+    st.session_state['video_list'] = ''
 
 
 def get_all_fonts():
@@ -248,7 +252,7 @@ params = VideoClipParams()
 # 左侧面板
 with left_panel:
     with st.container(border=True):
-        st.write(tr("Video Script Configuration"))
+        st.write(tr("Audio Script Configuration"))
         # 脚本语言
         video_languages = [
             (tr("Auto Detect"), ""),
@@ -284,8 +288,223 @@ with left_panel:
                                       options=range(len(script_path)),  # 使用索引作为内部选项值
                                       format_func=lambda x: script_path[x][0]  # 显示给用户的是标签
                                       )
-        params.video_clip_json = script_path[selected_json2][1]
-        video_json_file = params.video_clip_json
+        params.audio_clip_json = script_path[selected_json2][1]
+        audio_json_file = params.audio_clip_json
+
+        
+
+        # 文本内容
+        text_descript = st.text_area(
+            tr("Text Description"),
+            value=st.session_state['text_desc'],
+            height=180
+        )
+
+        # 音频设置
+        #st.write(tr("Audio Settings"))
+
+        # tts_providers = ['edge', 'azure']
+        # tts_provider = st.selectbox(tr("TTS Provider"), tts_providers)
+
+        voices = voice.get_all_azure_voices(filter_locals=support_locales)
+        friendly_names = {
+            v: v.replace("Female", tr("Female"))
+            .replace("Male", tr("Male"))
+            .replace("Neural", "")
+            for v in voices
+        }
+        saved_voice_name = config.ui.get("voice_name", "")
+        saved_voice_name_index = 0
+        if saved_voice_name in friendly_names:
+            saved_voice_name_index = list(friendly_names.keys()).index(saved_voice_name)
+        else:
+            for i, v in enumerate(voices):
+                if (
+                        v.lower().startswith(st.session_state["ui_language"].lower())
+                        and "V2" not in v
+                ):
+                    saved_voice_name_index = i
+                    break
+
+        selected_friendly_name = st.selectbox(
+            tr("Speech Synthesis"),
+            options=list(friendly_names.values()),
+            index=saved_voice_name_index,
+        )
+
+        voice_name = list(friendly_names.keys())[
+            list(friendly_names.values()).index(selected_friendly_name)
+        ]
+        params.voice_name = voice_name
+        config.ui["voice_name"] = voice_name
+        
+        temp_dir = utils.storage_dir("temp", create=True)
+        audio_file = os.path.join(temp_dir, f"tmp-voice-{str(uuid4())}.mp3")
+
+        #试听合成语音
+        if st.button(tr("Play Voice")):
+            play_content = text_descript
+
+            if not play_content:
+                play_content = st.session_state['text_desc']
+            if not play_content:
+                play_content = tr("Voice Example")
+            with st.spinner(tr("Synthesizing Voice")):
+                sub_maker = voice.tts(
+                    text=play_content,
+                    voice_name=voice_name,
+                    voice_rate=params.voice_rate,
+                    voice_file=audio_file,
+                )
+                # if the voice file generation failed, try again with a default content.
+                if not sub_maker:
+                    play_content = "This is a example voice. if you hear this, the voice synthesis failed with the original content."
+                    sub_maker = voice.tts(
+                        text=play_content,
+                        voice_name=voice_name,
+                        voice_rate=params.voice_rate,
+                        voice_file=audio_file,
+                    )
+
+                if sub_maker and os.path.exists(audio_file):
+                    st.audio(audio_file, format="audio/mp3")
+                    st.session_state['audio_path'] = audio_file
+                    #if os.path.exists(audio_file):
+                    #    os.remove(audio_file)
+
+        if voice.is_azure_v2_voice(voice_name):
+            saved_azure_speech_region = config.azure.get("speech_region", "")
+            saved_azure_speech_key = config.azure.get("speech_key", "")
+            azure_speech_region = st.text_input(
+                tr("Speech Region"), value=saved_azure_speech_region
+            )
+            azure_speech_key = st.text_input(
+                tr("Speech Key"), value=saved_azure_speech_key, type="password"
+            )
+            config.azure["speech_region"] = azure_speech_region
+            config.azure["speech_key"] = azure_speech_key
+        
+        params.audio_origin_path = st.session_state['audio_path']
+
+        params.voice_volume = st.selectbox(
+            tr("Speech Volume"),
+            options=[0.6, 0.8, 1.0, 1.2, 1.5, 2.0, 3.0, 4.0, 5.0],
+            index=2,
+        )
+
+        params.voice_rate = st.selectbox(
+            tr("Speech Rate"),
+            options=[0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5, 1.8, 2.0],
+            index=2,
+        )
+    # 生成音频脚本
+    with st.container(border=True):
+        if st.button(tr("Audio Script Generate"), key="auto_generate_script"):
+            with st.spinner(tr("Audio Script Generate")):
+                if params.audio_origin_path != "":
+                    script = llm.gemini_audio2json(
+                        audio_origin_name=params.audio_origin_path.split("\\")[-1],
+                        audio_origin_path=params.audio_origin_path,
+                        language=params.video_language,
+                    )
+                    cleaned_string = script.strip('```json').strip('```')
+                    st.session_state['audio_clip_json'] = json.loads(cleaned_string)
+                else:
+                    st.error(tr("请输入音频文件"))
+                    st.stop()
+
+        audio_clip_json_details = st.text_area(
+            tr("Audio Script"),
+            value=st.session_state['audio_clip_json'],
+            height=180
+        )
+
+        button_columns = st.columns(2)
+        with button_columns[0]:
+            if st.button(tr("Save Script"), key="auto_generate_terms", use_container_width=True):
+                if not audio_clip_json_details:
+                    st.error(tr("请输入音频脚本"))
+                    st.stop()
+
+                with st.spinner(tr("Save Script")):
+                    script_dir = utils.script_dir()
+                    # 获取当前时间戳，形如 2024-0618-171820
+                    timestamp = datetime.datetime.now().strftime("%Y-%m%d-%H%M%S")
+                    save_path = os.path.join(script_dir, f"{timestamp}.json")
+
+                    # 尝试解析输入的 JSON 数据
+                    input_json = str(audio_clip_json_details)
+                    # 去掉json的头尾标识
+                    input_json = input_json.strip('```json').strip('```')
+                    try:
+                        data = json.loads(input_json)
+                    except Exception as err:
+                        raise ValueError(
+                            f"脚本格式错误，请检查脚本是否符合 JSON 格式；{err} \n\n{traceback.format_exc()}")
+
+                    # 检查是否是一个列表
+                    if not isinstance(data, list):
+                        raise ValueError("JSON is not a list")
+
+                    # 检查列表中的每个元素是否包含所需的键
+                    required_keys = {"picture", "timestamp", "narration"}
+                    for item in data:
+                        if not isinstance(item, dict):
+                            raise ValueError("List 元素不是字典")
+                        if not required_keys.issubset(item.keys()):
+                            raise ValueError("Dict 元素不包含必需的键")
+
+                    # 存储为新的 JSON 文件
+                    with open(save_path, 'w', encoding='utf-8') as file:
+                        json.dump(data, file, ensure_ascii=False, indent=4)
+                        # 将data的值存储到 session_state 中，类似缓存
+                        st.session_state['audio_script_list'] = data
+                        st.session_state['audio_script_json_path'] = save_path
+                        # 刷新页面
+                        st.rerun()
+
+
+        def caijian():
+            with st.spinner(tr("裁剪视频中...")):
+                st.session_state['task_id'] = str(uuid4())
+
+            if st.session_state.get('audio_script_list', None) is not None:
+                audio_script_list = st.session_state.audio_script_list
+                time_list = [i['timestamp'] for i in audio_script_list]
+                subclip_videos = material.clip_videos(
+                    task_id=st.session_state['task_id'],
+                    timestamp_terms=time_list,
+                    origin_video=params.video_origin_path
+                )
+                if subclip_videos is None:
+                    st.error(tr("裁剪视频失败"))
+                    st.stop()
+                st.session_state['subclip_videos'] = subclip_videos
+                for video_script in audio_script_list:
+                    try:
+                        video_script['path'] = subclip_videos[video_script['timestamp']]
+                    except KeyError as e:
+                        st.error(f"裁剪视频失败")
+                # logger.debug(f"当前的脚本为：{st.session_state.audio_script_list}")
+            else:
+                st.error(tr("请先生成音频脚本"))
+
+
+        with button_columns[1]:
+            if st.button(tr("Crop Video"), key="auto_crop_video", use_container_width=True):
+                caijian()
+
+# 新中间面板
+with middle_panel:
+    with st.container(border=True):
+        st.write(tr("Video Settings"))
+
+        # 视频音频主题
+        audio_subject = st.text_area(
+            tr("Audio Subject"),
+            value=st.session_state['audio_subject'],
+            height = 1
+        )
 
         # 视频文件处理
         files = []
@@ -339,117 +558,7 @@ with left_panel:
             # params.video_origin_path = video_path[selected_index2][1]
             # config.app["video_origin_path"] = params.video_origin_path
 
-        # 剧情内容
-        video_plot = st.text_area(
-            tr("Plot Description"),
-            value=st.session_state['video_plot'],
-            height=180
-        )
-
-        if st.button(tr("Video Script Generate"), key="auto_generate_script"):
-            with st.spinner(tr("Video Script Generate")):
-                if video_json_file == "" and params.video_origin_path != "":
-                    script = llm.gemini_video2json(
-                        video_origin_name=params.video_origin_path.split("\\")[-1],
-                        video_origin_path=params.video_origin_path,
-                        video_plot=video_plot,
-                        language=params.video_language,
-                    )
-                    st.session_state['video_clip_json'] = script
-                    cleaned_string = script.strip("```json").strip("```")
-                    st.session_state['video_script_list'] = json.loads(cleaned_string)
-                else:
-                    with open(video_json_file, 'r', encoding='utf-8') as f:
-                        script = f.read()
-                        st.session_state['video_clip_json'] = script
-                        cleaned_string = script.strip("```json").strip("```")
-                        st.session_state['video_script_list'] = json.loads(cleaned_string)
-
-        video_clip_json_details = st.text_area(
-            tr("Video Script"),
-            value=st.session_state['video_clip_json'],
-            height=180
-        )
-
-        button_columns = st.columns(2)
-        with button_columns[0]:
-            if st.button(tr("Save Script"), key="auto_generate_terms", use_container_width=True):
-                if not video_clip_json_details:
-                    st.error(tr("请输入视频脚本"))
-                    st.stop()
-
-                with st.spinner(tr("Save Script")):
-                    script_dir = utils.script_dir()
-                    # 获取当前时间戳，形如 2024-0618-171820
-                    timestamp = datetime.datetime.now().strftime("%Y-%m%d-%H%M%S")
-                    save_path = os.path.join(script_dir, f"{timestamp}.json")
-
-                    # 尝试解析输入的 JSON 数据
-                    input_json = str(video_clip_json_details)
-                    # 去掉json的头尾标识
-                    input_json = input_json.strip('```json').strip('```')
-                    try:
-                        data = json.loads(input_json)
-                    except Exception as err:
-                        raise ValueError(
-                            f"视频脚本格式错误，请检查脚本是否符合 JSON 格式；{err} \n\n{traceback.format_exc()}")
-
-                    # 检查是否是一个列表
-                    if not isinstance(data, list):
-                        raise ValueError("JSON is not a list")
-
-                    # 检查列表中的每个元素是否包含所需的键
-                    required_keys = {"picture", "timestamp", "narration"}
-                    for item in data:
-                        if not isinstance(item, dict):
-                            raise ValueError("List 元素不是字典")
-                        if not required_keys.issubset(item.keys()):
-                            raise ValueError("Dict 元素不包含必需的键")
-
-                    # 存储为新的 JSON 文件
-                    with open(save_path, 'w', encoding='utf-8') as file:
-                        json.dump(data, file, ensure_ascii=False, indent=4)
-                        # 将data的值存储到 session_state 中，类似缓存
-                        st.session_state['video_script_list'] = data
-                        st.session_state['video_clip_json_path'] = save_path
-                        # 刷新页面
-                        st.rerun()
-
-
-        def caijian():
-            with st.spinner(tr("裁剪视频中...")):
-                st.session_state['task_id'] = str(uuid4())
-
-            if st.session_state.get('video_script_list', None) is not None:
-                video_script_list = st.session_state.video_script_list
-                time_list = [i['timestamp'] for i in video_script_list]
-                subclip_videos = material.clip_videos(
-                    task_id=st.session_state['task_id'],
-                    timestamp_terms=time_list,
-                    origin_video=params.video_origin_path
-                )
-                if subclip_videos is None:
-                    st.error(tr("裁剪视频失败"))
-                    st.stop()
-                st.session_state['subclip_videos'] = subclip_videos
-                for video_script in video_script_list:
-                    try:
-                        video_script['path'] = subclip_videos[video_script['timestamp']]
-                    except KeyError as e:
-                        st.error(f"裁剪视频失败")
-                # logger.debug(f"当前的脚本为：{st.session_state.video_script_list}")
-            else:
-                st.error(tr("请先生成视频脚本"))
-
-
-        with button_columns[1]:
-            if st.button(tr("Crop Video"), key="auto_crop_video", use_container_width=True):
-                caijian()
-
-# 新中间面板
-with middle_panel:
-    with st.container(border=True):
-        st.write(tr("Video Settings"))
+        # 视频剪辑设置
         video_concat_modes = [
             (tr("Sequential"), "sequential"),
             (tr("Random"), "random"),
@@ -515,96 +624,6 @@ with middle_panel:
             index=0,
         )
     with st.container(border=True):
-        st.write(tr("Audio Settings"))
-
-        # tts_providers = ['edge', 'azure']
-        # tts_provider = st.selectbox(tr("TTS Provider"), tts_providers)
-
-        voices = voice.get_all_azure_voices(filter_locals=support_locales)
-        friendly_names = {
-            v: v.replace("Female", tr("Female"))
-            .replace("Male", tr("Male"))
-            .replace("Neural", "")
-            for v in voices
-        }
-        saved_voice_name = config.ui.get("voice_name", "")
-        saved_voice_name_index = 0
-        if saved_voice_name in friendly_names:
-            saved_voice_name_index = list(friendly_names.keys()).index(saved_voice_name)
-        else:
-            for i, v in enumerate(voices):
-                if (
-                        v.lower().startswith(st.session_state["ui_language"].lower())
-                        and "V2" not in v
-                ):
-                    saved_voice_name_index = i
-                    break
-
-        selected_friendly_name = st.selectbox(
-            tr("Speech Synthesis"),
-            options=list(friendly_names.values()),
-            index=saved_voice_name_index,
-        )
-
-        voice_name = list(friendly_names.keys())[
-            list(friendly_names.values()).index(selected_friendly_name)
-        ]
-        params.voice_name = voice_name
-        config.ui["voice_name"] = voice_name
-
-        if st.button(tr("Play Voice")):
-            play_content = params.video_subject
-            if not play_content:
-                play_content = params.video_script
-            if not play_content:
-                play_content = tr("Voice Example")
-            with st.spinner(tr("Synthesizing Voice")):
-                temp_dir = utils.storage_dir("temp", create=True)
-                audio_file = os.path.join(temp_dir, f"tmp-voice-{str(uuid4())}.mp3")
-                sub_maker = voice.tts(
-                    text=play_content,
-                    voice_name=voice_name,
-                    voice_rate=params.voice_rate,
-                    voice_file=audio_file,
-                )
-                # if the voice file generation failed, try again with a default content.
-                if not sub_maker:
-                    play_content = "This is a example voice. if you hear this, the voice synthesis failed with the original content."
-                    sub_maker = voice.tts(
-                        text=play_content,
-                        voice_name=voice_name,
-                        voice_rate=params.voice_rate,
-                        voice_file=audio_file,
-                    )
-
-                if sub_maker and os.path.exists(audio_file):
-                    st.audio(audio_file, format="audio/mp3")
-                    if os.path.exists(audio_file):
-                        os.remove(audio_file)
-
-        if voice.is_azure_v2_voice(voice_name):
-            saved_azure_speech_region = config.azure.get("speech_region", "")
-            saved_azure_speech_key = config.azure.get("speech_key", "")
-            azure_speech_region = st.text_input(
-                tr("Speech Region"), value=saved_azure_speech_region
-            )
-            azure_speech_key = st.text_input(
-                tr("Speech Key"), value=saved_azure_speech_key, type="password"
-            )
-            config.azure["speech_region"] = azure_speech_region
-            config.azure["speech_key"] = azure_speech_key
-
-        params.voice_volume = st.selectbox(
-            tr("Speech Volume"),
-            options=[0.6, 0.8, 1.0, 1.2, 1.5, 2.0, 3.0, 4.0, 5.0],
-            index=2,
-        )
-
-        params.voice_rate = st.selectbox(
-            tr("Speech Rate"),
-            options=[0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5, 1.8, 2.0],
-            index=2,
-        )
 
         bgm_options = [
             (tr("No Background Music"), ""),
@@ -694,7 +713,7 @@ with right_panel:
 # 视频编辑面板
 with st.expander(tr("Video Check"), expanded=False):
     try:
-        video_list = st.session_state['video_script_list']
+        video_list = st.session_state['video_list']
     except KeyError as e:
         video_list = []
 
@@ -740,9 +759,9 @@ with st.expander(tr("Video Check"), expanded=False):
                                 if 'path' in video:
                                     del video['path']
                                     # 更新session_state以确保更改被保存
-                            st.session_state['video_clip_json'] = utils.to_json(video_list)
+                            st.session_state['audio_clip_json'] = utils.to_json(video_list)
                             # 替换原JSON 文件
-                            with open(video_json_file, 'w', encoding='utf-8') as file:
+                            with open(audio_json_file, 'w', encoding='utf-8') as file:
                                 json.dump(video_list, file, ensure_ascii=False, indent=4)
                             caijian()
                             st.rerun()
@@ -751,21 +770,25 @@ start_button = st.button(tr("Generate Video"), use_container_width=True, type="p
 if start_button:
     config.save_config()
     task_id = st.session_state.get('task_id')
-    if st.session_state.get('video_script_json_path') is not None:
-        params.video_clip_json = st.session_state.get('video_clip_json')
+    if st.session_state.get('audio_script_json_path') is not None:
+        params.audio_json_file = st.session_state.get('audio_clip_json')
 
-    logger.debug(f"当前的脚本为：{params.video_clip_json}")
+    logger.debug(f"当前的脚本为：{params.audio_json_file}")
 
     if not task_id:
         st.error(tr("请先裁剪视频"))
         scroll_to_bottom()
         st.stop()
-    if not params.video_clip_json:
+    if not params.audio_json_file:
         st.error(tr("脚本文件不能为空"))
         scroll_to_bottom()
         st.stop()
     if not params.video_origin_path:
         st.error(tr("视频文件不能为空"))
+        scroll_to_bottom()
+        st.stop()
+    if not params.audio_origin_path:
+        st.error(tr("音频文件不能为空"))
         scroll_to_bottom()
         st.stop()
     if llm_provider != 'g4f' and not config.app.get(f"{llm_provider}_api_key", ""):

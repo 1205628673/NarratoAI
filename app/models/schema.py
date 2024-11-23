@@ -330,12 +330,14 @@ class BgmUploadResponse(BaseResponse):
 
 
 class VideoClipParams(BaseModel):
-    video_subject: Optional[str] = "春天的花海让人心旷神怡"
+    audio_subject: Optional[str] = "欢迎收看天涯神贴《浅释时事，偶读新闻》"
 
-    video_clip_json: Optional[str] = ""      # 视频剪辑脚本
+    audio_clip_json: Optional[str] = ""      # 视频剪辑脚本
     video_origin_path: Optional[str] = ""    # 原视频路径
+    audio_origin_path: Optional[str] = ""    # 原音频路径
+    play_content: Optional[str] = ""         # 音频文本
     video_aspect: Optional[VideoAspect] = VideoAspect.portrait.value        # 视频比例
-    video_clip_duration: Optional[int] = 5      # 视频片段时长
+    video_clip_duration: Optional[int] = 3      # 视频片段时长
     video_count: Optional[int] = 1      # 视频片段数量
     video_source: Optional[str] = "local"
     video_language: Optional[str] = ""  # 自动检测
