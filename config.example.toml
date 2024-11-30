@@ -190,5 +190,5 @@
 [azure]
     # Azure Speech API Key
     # Get your API key at https://portal.azure.com/#view/Microsoft_Azure_ProjectOxford/CognitiveServicesHub/~/SpeechServices
-    speech_key=""AQAVvbaLqHPZ6MWaIW2Xg8DMSI30wxqOB7xefbobceQxSqmdWHB0JQQJ99AKAC3pKaRXJ3w3AAAYACOGWvzG
-    speech_region=""eastasia
+    speech_key=""
+    speech_region=""
